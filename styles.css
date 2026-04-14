@@ -1,0 +1,21 @@
+/* Provenance plugin - AI-authored block highlighting */
+.provenance-ai-block {
+  border-left: 3px solid rgba(99, 155, 255, 0.5);
+  background-color: rgba(99, 155, 255, 0.06);
+  padding-left: 8px;
+  margin-left: -11px;
+}
+
+/* Reading mode */
+.provenance-ai-reading {
+  border-left: 3px solid rgba(99, 155, 255, 0.5);
+  background-color: rgba(99, 155, 255, 0.06);
+  padding-left: 8px;
+}
+
+/* Dark theme adjustments */
+.theme-dark .provenance-ai-block,
+.theme-dark .provenance-ai-reading {
+  border-left-color: rgba(99, 155, 255, 0.4);
+  background-color: rgba(99, 155, 255, 0.08);
+}
