@@ -17,7 +17,7 @@ module.exports = H(I);
 var c = require("obsidian");
 var v = require("obsidian");
 
-var VERSION = "2.1.0";
+var VERSION = "2.1.1";
 
 // Legacy inline marker — still recognised for backwards compat, auto-migrated to frontmatter
 var AI_MARKER = "<!-- ai -->";
@@ -341,6 +341,10 @@ var SettingsTab = class extends p.PluginSettingTab {
     var el = this.containerEl;
     el.empty();
     el.createEl("h2", { text: "Provenance Settings" });
+    el.createEl("p", {
+      text: "Version " + VERSION,
+      cls: "setting-item-description"
+    });
 
     new p.Setting(el)
       .setName("Enable tracking")
