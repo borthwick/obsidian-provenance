@@ -17,7 +17,7 @@ module.exports = H(I);
 var c = require("obsidian");
 var v = require("obsidian");
 
-var VERSION = "2.1.1";
+var VERSION = "2.3.0";
 
 // Legacy inline marker — still recognised for backwards compat, auto-migrated to frontmatter
 var AI_MARKER = "<!-- ai -->";
@@ -26,6 +26,10 @@ var AI_MARKER = "<!-- ai -->";
 // Design: inspired by iainc/Markdown-Annotations — authorship lives separate from prose.
 // e.g.  ai_blocks: 2 5 7
 var FM_AI_KEY = "ai_blocks";
+
+// Frontmatter flag that marks the entire page as AI-authored (all body blocks classified as AI).
+// e.g.  ai_page: true
+var FM_AI_PAGE_KEY = "ai_page";
 
 // ─── Frontmatter Utilities ──────────────────────────────────────────────────
 
@@ -114,6 +118,42 @@ function stripLegacyMarkers(content) {
   return content.replace(/<!-- ai -->/g, "").replace(/\n{3,}/g, "\n\n");
 }
 
+// Returns true if the file's frontmatter has ai_page: true.
+function readAiPageFlag(content) {
+  var fmEnd = fmEndOffset(content);
+  if (fmEnd === -1) return false;
+  var fmClose = content.indexOf("\n---", 4);
+  var fmText = content.substring(4, fmClose);
+  return /^ai_page\s*:\s*true\s*$/m.test(fmText);
+}
+
+// Adds or removes ai_page: true in frontmatter.
+function writeAiPageFlag(content, on) {
+  var fmEnd = fmEndOffset(content);
+  var keyRe = /^ai_page\s*:.*\n?/m;
+
+  if (fmEnd === -1) {
+    if (!on) return content;
+    return "---\n" + FM_AI_PAGE_KEY + ": true\n---\n\n" + content;
+  }
+
+  var fmClose = content.indexOf("\n---", 4);
+  var fmText = content.substring(4, fmClose);
+  var after = content.substring(fmEnd);
+
+  if (on) {
+    if (keyRe.test(fmText)) {
+      fmText = fmText.replace(keyRe, FM_AI_PAGE_KEY + ": true\n");
+    } else {
+      fmText = fmText.trimEnd() + "\n" + FM_AI_PAGE_KEY + ": true";
+    }
+  } else {
+    fmText = fmText.replace(keyRe, "");
+  }
+
+  return "---\n" + fmText + "\n---" + after;
+}
+
 // Given a cursor character offset in the full document and the content string,
 // returns the 0-based paragraph index in the body that contains that offset.
 function blockIdxAtOffset(content, cursorOffset) {
@@ -134,19 +174,21 @@ function blockIdxAtOffset(content, cursorOffset) {
 }
 
 // Builds the in-memory provenance object for a regular (non-Snipd, non-Granola) file
-// from its frontmatter ai_blocks value.
+// from its frontmatter ai_blocks value. If ai_page: true is set, marks all body blocks AI.
 function provenanceFromFrontmatter(content) {
   var aiSet = readAiBlocks(content);
+  var wholePage = readAiPageFlag(content);
   var body = bodyText(content);
   var blocks = body.split(/\n\n+/);
   var ts = new Date().toISOString();
   return {
     version: 2,
-    source: "frontmatter",
+    source: wholePage ? "page" : "frontmatter",
     blocks: blocks.map(function(block, idx) {
+      var isAi = wholePage || aiSet.has(idx);
       return {
         index: idx,
-        author: aiSet.has(idx) ? "ai" : "human",
+        author: isAi ? "ai" : "human",
         ts: ts,
         preview: block.substring(0, 60).replace(/\n/g, " ")
       };
@@ -207,6 +249,31 @@ var g = class {
   static isGranola(content) {
     var m = content.match(/^---\n([\s\S]*?)\n---/);
     return m ? /granola_id:/m.test(m[1]) : false;
+  }
+
+  static isRuune(content) {
+    var m = content.match(/^---\n([\s\S]*?)\n---/);
+    return m ? /^source:\s*ruune\s*$/m.test(m[1]) : false;
+  }
+
+  static isWiki(filePath) {
+    return typeof filePath === "string" && filePath.startsWith("wiki/");
+  }
+
+  // Whole-page AI: every body block classified as AI. Skips the leading frontmatter block.
+  static generateAllAiProvenance(content, sourceLabel) {
+    var blocks = g.splitBlocks(content);
+    var ts = new Date().toISOString();
+    return {
+      version: 2, source: sourceLabel,
+      blocks: blocks.map(function(block, idx) {
+        var t = block.trim();
+        if (idx === 0 && t.startsWith("---")) {
+          return { index: idx, author: "human", ts: ts, preview: t.substring(0, 60).replace(/\n/g, " ") };
+        }
+        return { index: idx, author: "ai", ts: ts, preview: t.substring(0, 60).replace(/\n/g, " ") };
+      })
+    };
   }
 
   // ─── Snipd ───
@@ -290,26 +357,48 @@ function buildDecorations(view) {
   var bStart = bodyStart(text);
   var body = text.substring(bStart);
   var blocks = body.split(/\n\n+/);
-  var pos = 0;
 
+  // Pre-compute per-block ranges (doc-space) plus the gap that follows each block.
+  var ranges = [];
+  var pos = 0;
   for (var i = 0; i < blocks.length; i++) {
     var block = blocks[i];
-    var blockDocStart = bStart + pos;
-    var blockDocEnd = bStart + pos + block.length;
     var meta = prov.blocks[i];
-
-    if (meta && meta.author === "ai") {
-      var startLine = doc.lineAt(Math.min(blockDocStart, doc.length));
-      var endLine = doc.lineAt(Math.min(Math.max(blockDocEnd - 1, startLine.from), doc.length));
-      for (var ln = startLine.number; ln <= endLine.number; ln++) {
-        var line = doc.line(ln);
-        builder.add(line.from, line.from, d.Decoration.line({ class: "provenance-ai-block" }));
-      }
-    }
-
+    var docStart = bStart + pos;
+    var docEnd = bStart + pos + block.length;
     pos += block.length;
-    var gap = body.substring(pos).match(/^\n\n+/);
-    if (gap) pos += gap[0].length;
+    var gapMatch = body.substring(pos).match(/^\n\n+/);
+    var gapLen = gapMatch ? gapMatch[0].length : 0;
+    ranges.push({
+      isAi: !!(meta && meta.author === "ai"),
+      docStart: docStart,
+      docEnd: docEnd,
+      gapEnd: docEnd + gapLen
+    });
+    pos += gapLen;
+  }
+
+  for (var i = 0; i < ranges.length; i++) {
+    var r = ranges[i];
+    if (!r.isAi) continue;
+
+    // Bridge the blank-line gap when the next block is also AI so the border stays continuous.
+    var nextIsAi = i + 1 < ranges.length && ranges[i + 1].isAi;
+    var endOffset = nextIsAi ? r.gapEnd - 1 : r.docEnd - 1;
+
+    var startLine = doc.lineAt(Math.min(r.docStart, doc.length));
+    endOffset = Math.max(endOffset, startLine.from);
+    var endLine = doc.lineAt(Math.min(endOffset, doc.length));
+
+    for (var ln = startLine.number; ln <= endLine.number; ln++) {
+      var line = doc.line(ln);
+      var isGap = line.text.length === 0;
+      builder.add(
+        line.from,
+        line.from,
+        d.Decoration.line({ class: isGap ? "provenance-ai-gap" : "provenance-ai-block" })
+      );
+    }
   }
 
   return builder.finish();
@@ -389,6 +478,9 @@ var SettingsTab = class extends p.PluginSettingTab {
     });
     var list = el.createEl("ul");
     list.createEl("li", { text: "Regular notes: ai_blocks in frontmatter — use command palette to toggle any block" });
+    list.createEl("li", { text: "Whole-page AI: ai_page: true in frontmatter — every body block classified as AI" });
+    list.createEl("li", { text: "Wiki: any file under wiki/ — auto-classified as fully AI-authored" });
+    list.createEl("li", { text: "Ruune: detected by source: ruune — fully AI-authored" });
     list.createEl("li", { text: "Granola notes: detected by granola_id — summaries AI, transcript human" });
     list.createEl("li", { text: "Snipd notes: detected by from_snipd — titles/summaries AI, quotes human" });
     list.createEl("li", { text: "Legacy <!-- ai --> markers: auto-migrated to frontmatter on next modify" });
@@ -397,6 +489,11 @@ var SettingsTab = class extends p.PluginSettingTab {
     el.createEl("p", {
       text: "\"Provenance: Toggle AI authorship for current block\" — place cursor anywhere " +
             "in a paragraph and run the command to mark or unmark it as AI-written.",
+      cls: "setting-item-description"
+    });
+    el.createEl("p", {
+      text: "\"Provenance: Toggle AI authorship for whole page\" — flips ai_page: true in frontmatter, " +
+            "marking every body block AI-authored at once.",
       cls: "setting-item-description"
     });
   }
@@ -496,6 +593,33 @@ var w = class extends c.Plugin {
       }
     });
 
+    // Toggle whole-page AI authorship (adds/removes ai_page: true in frontmatter)
+    this.addCommand({
+      id: "toggle-ai-page",
+      name: "Toggle AI authorship for whole page",
+      editorCallback: async (editor, view) => {
+        if (!view || !view.file) return;
+        var file = view.file;
+        var content = await this.app.vault.read(file);
+        var wasOn = readAiPageFlag(content);
+        var newContent = writeAiPageFlag(content, !wasOn);
+
+        this.writingProvenance = true;
+        try {
+          await this.app.vault.modify(file, newContent);
+          this.contentCache.set(file.path, newContent);
+        } finally {
+          this.writingProvenance = false;
+        }
+
+        var prov = provenanceFromFrontmatter(newContent);
+        s.data.set(file.path, prov);
+        this.refreshActiveEditor();
+        this.updateStatusBar();
+        new c.Notice(wasOn ? "Whole-page AI mark removed" : "Whole page marked as AI-written");
+      }
+    });
+
     this.statusBarEl = this.addStatusBarItem();
     this.statusBarEl.setText("");
     new c.Notice("Provenance v" + VERSION + " loaded");
@@ -588,6 +712,14 @@ var w = class extends c.Plugin {
 
   // ─── Classify a file on modify ───
   async classifyFile(file, content) {
+    // Wiki: path-based whole-page AI
+    if (g.isWiki(file.path)) {
+      return g.generateAllAiProvenance(content, "wiki");
+    }
+    // Ruune: frontmatter source: ruune → whole-page AI
+    if (g.isRuune(content)) {
+      return g.generateAllAiProvenance(content, "ruune");
+    }
     // Snipd: structural sidecar
     if (g.isSnipd(content)) {
       var prov = g.generateSnipdProvenance(content);
@@ -622,6 +754,14 @@ var w = class extends c.Plugin {
         content = await this.app.vault.read(file);
         this.contentCache.set(file.path, content);
       }
+      if (g.isWiki(file.path)) {
+        s.data.set(file.path, g.generateAllAiProvenance(content, "wiki"));
+        return;
+      }
+      if (g.isRuune(content)) {
+        s.data.set(file.path, g.generateAllAiProvenance(content, "ruune"));
+        return;
+      }
       if (g.isSnipd(content)) {
         var prov = await this.store.load(file.path) || g.generateSnipdProvenance(content);
         s.data.set(file.path, prov);
@@ -633,7 +773,8 @@ var w = class extends c.Plugin {
         return;
       }
       var aiSet = readAiBlocks(content);
-      if (aiSet.size > 0) {
+      var wholePage = readAiPageFlag(content);
+      if (aiSet.size > 0 || wholePage) {
         s.data.set(file.path, provenanceFromFrontmatter(content));
       }
     } catch (e) {}
