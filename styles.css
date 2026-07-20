@@ -14,6 +14,16 @@
   padding-left: 8px;
 }
 
+/* Breathing room at the start / end of each AI-authored run */
+.provenance-ai-start {
+  margin-top: 0.8em;
+  padding-top: 0.2em;
+}
+.provenance-ai-end {
+  margin-bottom: 0.8em;
+  padding-bottom: 0.2em;
+}
+
 /* Dark theme adjustments */
 .theme-dark .provenance-ai-block,
 .theme-dark .provenance-ai-gap,

@@ -17,7 +17,7 @@ module.exports = H(I);
 var c = require("obsidian");
 var v = require("obsidian");
 
-var VERSION = "2.3.0";
+var VERSION = "2.3.1";
 
 // Legacy inline marker — still recognised for backwards compat, auto-migrated to frontmatter
 var AI_MARKER = "<!-- ai -->";
@@ -383,6 +383,7 @@ function buildDecorations(view) {
     if (!r.isAi) continue;
 
     // Bridge the blank-line gap when the next block is also AI so the border stays continuous.
+    var prevIsAi = i > 0 && ranges[i - 1].isAi;
     var nextIsAi = i + 1 < ranges.length && ranges[i + 1].isAi;
     var endOffset = nextIsAi ? r.gapEnd - 1 : r.docEnd - 1;
 
@@ -393,10 +394,15 @@ function buildDecorations(view) {
     for (var ln = startLine.number; ln <= endLine.number; ln++) {
       var line = doc.line(ln);
       var isGap = line.text.length === 0;
+      var isRunStart = !prevIsAi && ln === startLine.number;
+      var isRunEnd = !nextIsAi && ln === endLine.number;
+      var classes = [isGap ? "provenance-ai-gap" : "provenance-ai-block"];
+      if (isRunStart) classes.push("provenance-ai-start");
+      if (isRunEnd) classes.push("provenance-ai-end");
       builder.add(
         line.from,
         line.from,
-        d.Decoration.line({ class: isGap ? "provenance-ai-gap" : "provenance-ai-block" })
+        d.Decoration.line({ class: classes.join(" ") })
       );
     }
   }
