@@ -17,7 +17,7 @@ module.exports = H(I);
 var c = require("obsidian");
 var v = require("obsidian");
 
-var VERSION = "2.3.1";
+var VERSION = "2.3.2";
 
 // Legacy inline marker — still recognised for backwards compat, auto-migrated to frontmatter
 var AI_MARKER = "<!-- ai -->";
@@ -811,8 +811,12 @@ var w = class extends c.Plugin {
   }
 
   onunload() {
+    s.enabled = false;
     s.data.clear();
     s.currentFile = null;
+    // Force the active CodeMirror view to re-render so any lingering
+    // .provenance-ai-* line decorations are dropped immediately.
+    try { this.refreshActiveEditor(); } catch (e) {}
   }
 
   isProvenanceFile(path) {
